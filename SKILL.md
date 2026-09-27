@@ -1,152 +1,133 @@
 ---
 name: jianshu-publisher
-description: 简书（jianshu.com）文章自动发布流程。通过 isolated-browser 拉起隔离 Chrome，再用 agent-browser --cdp 直连驱动完成登录检查、填标题、填正文、发布，并正确识别"每日发文上限"等真实结果。适用于 Windows + Chrome + isolated-browser 环境。触发词：简书发布、jianshu、发布文章到简书。
+description: 简书（jianshu.com）文章自动发布流程。通过 isolated-browser 拉起隔离 Chrome，再用 playwright-core 直连 CDP 完成登录检查、填标题、填正文、上传插图、发布，并正确识别"每日发文上限"等真实结果。适用于 Windows + Chrome + isolated-browser 环境。触发词：简书发布、jianshu、发布文章到简书。
 ---
 
-# 简书文章自动发布 Skill（独立实例路线）
+# 简书文章自动发布 Skill（playwright-core 直连 CDP 路线）
+
+> 2026-09-27 全面改版：agent-browser CLI 本机不存在（且键盘 type 卡死）已彻底废弃，
+> 统一改用 **playwright-core 直连 CDP**（与知乎/搜狐 skill 同路线），新增 **插图** 能力。
+> 全流程已在真实发布中验证：https://www.jianshu.com/p/d757100b45d4
 
 ## 适用场景
 
-- 把文章自动发布到简书
-- 复用同一流程处理多篇文章（通过命令行传参，无需改源码）
-- 处理发布被"每日 2 篇上限"拦截的情况（文章留作草稿，次日可重发）
+- 把文章（含配图）自动发布到简书
+- 复用同一流程处理多篇文章（命令行传参，无需改源码）
+- 处理发布被"每日 2 篇上限"拦截的情况（文章留作草稿，次日重发）
 - 用户 Chrome 正在使用、不想关闭时，用隔离实例发布，不碰用户浏览器
 
-## 浏览器方案（关键选型）
+## 浏览器方案
 
-本 skill 的浏览器启动与驱动**复用 [isolated-browser](../isolated-browser/SKILL.md) skill**，而不是 xb CLI：
+复用 [isolated-browser](../isolated-browser/SKILL.md) skill 拉起隔离 Chrome
+（固定 `--user-data-dir=~/.chrome_qclaw_stable` + CDP 端口 9222，登录态持久化），
+驱动层用 **playwright-core 直连 CDP**。
 
-| 路线 | 说明 |
-|------|------|
-| **isolated-browser（本 skill 采用）** | 拉起一个与用户默认 Chrome 完全隔离的独立 Chrome 实例（固定 `--user-data-dir`=~/.chrome_qclaw_stable + 独立 CDP 端口），用 `agent-browser --cdp` 直连驱动，绕开 xb 安全锁，不打扰用户现有浏览器。 |
-| xb 托管（不采用） | xb 有安全锁：检测到用户 Chrome/Edge 在跑会拒绝另起实例，必须先关用户浏览器。该路线已废弃。 |
-
-> **若 `isolated-browser` skill 未安装**：从 GitHub 安装 `https://github.com/liuxucai/isolated-browser-skill`（clone 或下载 ZIP 解压到 skills/isolated-browser），再调用其 `scripts/launch.js` 拉起隔离实例。
+> 若 isolated-browser 未安装：从 `https://github.com/liuxucai/isolated-browser-skill` 安装。
 
 ## 环境要求
 
 | 项目 | 要求 |
 |------|------|
-| 浏览器 | 正式版 Chrome（isolated-browser 找 `C:\Program Files\Google\Chrome\Application\chrome.exe`） |
-| 控制工具 | 全局 `agent-browser` CLI（qclaw 自带，`.cmd` 优先） |
-| 依赖 skill | `isolated-browser`（同工作区 `skills/isolated-browser`） |
-| 运行环境 | Windows PowerShell，**不**支持 `&&` 链式语法 |
-| 脚本语言 | Node.js（封装所有 agent-browser 调用，规避 PowerShell 中文乱码） |
+| 浏览器 | 正式版 Chrome（isolated-browser 自动定位） |
+| 驱动 | playwright-core，装在 `~/.workbuddy/binaries/node/workspace/node_modules` |
+| 运行时 | managed Node 22（`~/.workbuddy/binaries/node/versions/.../node.exe`，或 bash 里直接 `node`） |
+| 依赖 skill | `isolated-browser`（拉起隔离实例） |
+
+## 使用步骤
+
+```bash
+# 1) 后台拉起隔离 Chrome 并保活（必须 run_in_background，沙箱会回收 detached 子进程）
+node ~/.workbuddy/skills/isolated-browser/scripts/launch.js "https://www.jianshu.com/writer#/" && sleep 7200
+
+# 2) 发布（正文 UTF-8 txt 按换行分段；配图可选）
+export OPENCLAW_NODE_MODULES="$HOME/.workbuddy/binaries/node/workspace/node_modules"
+node ~/.workbuddy/skills/jianshu-publisher/scripts/jianshu_publish_pw.js \
+  --title "婚车租车全攻略：如何选到心仪的婚庆婚车车队？" \
+  --body-file ./article.txt \
+  --image "D:/skills/car/11.jpg"
+
+# 只填不发布（存草稿）：加 --no-publish
+# 指定端口：--cdp-port 9222
+```
+
+退出码：`0`=发布成功 | `2`=每日上限拦截（草稿留存，次日重发） | `3`=编辑器非空白且无法新建 | `1`=其他错误。
 
 ## 核心原则
 
-### ⚠️ 登录原则
-需要登录时，**不填任何账号密码**，直接打开登录页让用户手动操作。
+1. **登录不填密码**——检测到未登录直接报 `NOT_LOGGED_IN` 退出，人工在隔离浏览器里登录后重跑。
+2. **绝不碰用户自己的 Chrome**——只用 isolated-browser 拉起的隔离实例。
+3. **禁止覆盖已有文章**——进入 writer 时若旧笔记有内容，先自动点「新建文章」；
+   得不到空白笔记即抛 `EDITOR_NOT_BLANK` 中止，绝不 Ctrl+A 清空。
+4. **保留默认文集**——发布弹"请输入文集名"时点「确 认」，不新建文集。
+5. **插图后必须关弹窗**——插图弹窗会挡住发布按钮（详见 troubleshooting Q4）。
 
-### ⚠️ 浏览器原则
-启用浏览器统一调用 `isolated-browser` skill（拉起隔离 Chrome + CDP 直连），不混用用户自己的 Chrome。
-- 隔离实例由 isolated-browser 拉起（固定 profile `~/.chrome_qclaw_stable` + 独立 CDP 端口），用 `agent-browser --cdp` 直连驱动。
-- **绝不直接 `exec chrome.exe`** 拿用户实例。
-
-### ⚠️ 文集确认原则
-除非用户明确指令，否则不新建/不指定文集。发布后弹"请输入文集名" → 保留默认，点"确 认"。
-
-### ⚠️ 禁止覆盖已有文章原则（最高优先级）
-绝不用 Ctrl+A+Delete 清空一篇"有内容的笔记"。`/writer#/` 会恢复上次编辑的笔记，`openPublishPage()` 先跑覆盖守卫：检测到正文非空 → 自动点"新建文章"；得不到空白笔记就抛 `EDITOR_NOT_BLANK` 中止，绝不写入。若 `REFUSE_FILL`：停下告知用户手动新建空白笔记。原文可经编辑器"历史版本"回滚（见 troubleshooting.md）。
-
-### ⚠️ 每日发文上限原则（重要）
-简书**每天只能发 2 篇**。第 3 篇会被平台拒绝，表现为"发布后 URL 不跳转、文章留在编辑器/存为草稿"。
-- 本 skill 的 `publish()` 会检测限流提示，返回 `QUOTA`（退出码 2），**不再伪装成"状态未知"**。
-- 被拦截时文章已存为草稿，次日配额重置后可重发，无需重填。
-
-## 直接用法（推荐）
-
-> **启用浏览器**：先调用 `isolated-browser` skill 拉起隔离 Chrome（未安装则从 `https://github.com/liuxucai/isolated-browser-skill` 安装），再跑本 skill 的发布脚本。
-
-```bash
-# 1) 拉起隔离 Chrome（固定 profile ~/.chrome_qclaw_stable + CDP 端口 9222 常驻）
-node skills/isolated-browser/scripts/launch.js
-#    打开简书 writer 页后，在弹出的浏览器窗口中手动登录
-
-# 2) 发布文章（脚本内 CDP 直连 9222，无需再过 isolated-browser）
-#    正文来自文件（UTF-8，按换行分段）
-node skills/jianshu-publisher/scripts/publish_cdp.js \
-  --cdp-port 9222 \
-  --title "差异对比：让每一次决策都更聪明的 5 个方法" \
-  --body-file "./article.txt"
-
-# 正文直接给（\n 分段）
-node skills/jianshu-publisher/scripts/publish_cdp.js \
-  --cdp-port 9222 --title "标题" --body "第一段。\n第二段。"
-
-# 已知已登录，跳过登录检查提速
-node skills/jianshu-publisher/scripts/publish_cdp.js --cdp-port 9222 --title "标题" --body-file a.txt --no-login-check
-
-# 仅开 Chrome + 登录页，不发布
-node skills/jianshu-publisher/scripts/publish_cdp.js --cdp-port 9222 --login-only
-```
-
-也可直接调用本 skill 自带的 `scripts/launch_isolated_chrome.js`（与 isolated-browser 参数一致）拉起实例，再用 `publish_cdp.js` 连接发布。
-
-退出码：`0`=成功，`2`=被每日上限拦截（草稿留存），`3`=编辑器非空白且无法新建（已保护原文中止），`1`=其他错误。
-
-## 发布流程（脚本内部）
+## 脚本内部流程
 
 ```
-1. ensureChrome()     连接 isolated-browser 拉起的隔离 Chrome（agent-browser --cdp）
-2. checkLogin()       未登录 → 开登录页让用户手动登（不填密码）
-3. openPublishPage()  打开 /writer#/，覆盖守卫确保空白新笔记
-4. fillTitle()        input._24i7u + agent-browser type 逐字输入（React 受控组件同步）
-5. fillBody()         div.kalamu-area + agent-browser type 逐字输入（真实 keystroke）
-6. publish()          发布文章(a[data-action=publicize]) → 直接发布(li._2po2r.cRfUr) → 确 认文集
-7. getPublishStatus() 三态判定 SUCCESS / QUOTA / UNKNOWN
+连接 CDP → 找/开 writer 页 → 登录检查
+→ 等编辑器(input._24i7u + div.kalamu-area)
+→ 覆盖守卫(bodyLen>0 → 点「新建文章」)
+→ 填标题(type delay=15, React 受控组件同步)
+→ 填正文(逐段 keyboard.type, 段间 Enter, delay=8)
+→ 插图: 点 a.fa.fa-picture-o → 弹窗内 #kalamu-upload-image setInputFiles
+        → 等 div.kalamu-area img 数量稳定 → 关弹窗(.ZTNas)
+→ 发布: a[data-action=publicize] → li._2po2r.cRfUr → 「确 认」
+→ 判定: a._2ajaT 链接 / li「已发布」/ URL 含 /p/ → SUCCESS
+        每日上限正则 → QUOTA(退出码 2)
 ```
 
-## 选择器（已验证，勿改）
+## 选择器速查（2026-09-27 实测）
 
 | 元素 | 选择器 | 说明 |
 |------|--------|------|
-| 标题输入框 | `input._24i7u` | ✅ 默认值是日期；勿用 `_1CtV4`（那是文集弹窗） |
-| 正文编辑器 | `div.kalamu-area` | contenteditable，kalamu 编辑器 |
-| 发布文章按钮 | `a[data-action="publicize"]` | 工具栏按钮，点开展下拉 |
-| 直接发布项 | `li._2po2r.cRfUr` | 下拉菜单项 |
+| 标题输入框 | `input._24i7u` | ✅ 默认值是日期 |
+| 正文编辑器 | `div.kalamu-area` | contenteditable（kalamu） |
+| 工具栏图片按钮 | `a.fa.fa-picture-o` | 点击弹出网页内弹窗 |
+| 插图弹窗 | `div[role=dialog]` | 关闭按钮 `.ZTNas` |
+| 上传文件控件 | `#kalamu-upload-image` | 弹窗内 input[type=file]，直接 setInputFiles |
+| 发布文章按钮 | `a[data-action="publicize"]` | ⚠️ 发布成功后从 DOM 消失 |
+| 直接发布菜单项 | `li._2po2r.cRfUr` | 成功后文字变「已发布」 |
 | 文集确认按钮 | `button`（文字"确 认"，中间有空格） | 保留默认文集 |
+| 发布成功链接 | `a._2ajaT` | 文字「发布成功，点击查看文章」，href 为文章 `/p/` 链接 |
 
-## 填写机制（实测有效）
+## 发布成功判定（优先级从高到低）
 
-`agent-browser type <selector> <text>` 发送真实键盘事件，React 受控组件自动同步 value / store。
-- ❌ 不用 `input.value=` 直接赋值（React 不感知）
-- ❌ 不用 `innerHTML` / `execCommand`（字数 0 发布必败）
-- 填充后校验：`input._24i7u.value` 应等于标题；`div.kalamu-area.innerText.length` 应 > 0
+1. `a._2ajaT` 出现且 href 含 `/p/` —— 最可靠，直接拿到文章链接
+2. `li._2po2r.cRfUr` 文字为「已发布」
+3. URL 含 `/p/`
 
-## 发布成功判定（三态）
-
-- ✅ **SUCCESS**：左侧笔记列表出现"已发布"，或 URL 含 `/p/`
-- ⛔ **QUOTA**：出现"每天只能发 N 篇"等上限提示（未发布，草稿留存）
-- ❓ **UNKNOWN**：无法判定，需手动确认
-
-⚠️ URL **不一定跳转**（常停在编辑器页），以左侧"已发布"状态为准。
+⚠️ 发布成功后 `a[data-action="publicize"]` 会**从 DOM 消失**，不要用它判定。
+每日上限提示匹配 QUOTA 正则（troubleshooting Q7）。
 
 ## 失败处理
 
-| 错误 | 解决 |
+| 错误/现象 | 解决 |
 |------|------|
-| 隔离 Chrome 启动超时 | CDP 端口无响应 / Chrome 路径错；确认 isolated-browser 已拉起实例 |
-| agent-browser 命令挂起 | 同时传了 `--cdp` 和 `--profile`；只传 `--cdp`，不传 `--profile` |
-| 编辑器加载超时 | 导航到 `/writer#/`（不是 `/notes/new`） |
-| 标题填后值不对 | 确认用 `input._24i7u`，不是 `_1CtV4` |
-| 正文字数 0 | 用 `agent-browser type` 真实输入，非 innerHTML |
-| 被每日上限拦截（退出码 2） | 文章已存草稿，次日配额重置后重跑同一命令 |
-| EDITOR_NOT_BLANK（退出码 3） | 编辑器有内容且无法自动新建；手动点"新建文章"后再发 |
+| `NOT_LOGGED_IN` | 在隔离浏览器手动登录后重跑（profile 已持久化，通常只需一次） |
+| `EDITOR_LOAD_TIMEOUT` | 确认导航到 `/writer#/`；CDP 端口与实例一致 |
+| `EDITOR_NOT_BLANK`（退出码 3） | 手动点「新建文章」后重发 |
+| `NO_UPLOAD_INPUT` | 图片按钮没弹出弹窗，重试或截图排查 |
+| `IMAGE_UPLOAD_TIMEOUT` | 图片过大/网络慢；检查 `div.kalamu-area img` |
+| 点击 publicize 报 "intercepts pointer events" | 插图弹窗未关；脚本已内置 closeImageDialog 兜底 |
+| 退出码 2（QUOTA） | 草稿已存，次日配额重置后重跑同一命令 |
 
-详见 [references/troubleshooting.md](references/troubleshooting.md)。
+更多坑位见 [references/troubleshooting.md](references/troubleshooting.md)。
 
 ## 文件结构
 
 ```
-jianshu-publisher/
-├── SKILL.md                         ← 本文件
+jianshu-publish-skill/
+├── SKILL.md                        ← 本文件（playwright 直连路线）
+├── VERSION
 ├── scripts/
-│   ├── publish_cdp.js              ← ✅ 主发布脚本（agent-browser --cdp 直连隔离实例）
-│   ├── launch_isolated_chrome.js   ← ✅ 拉起隔离 Chrome 实例（参数同 isolated-browser）
-│   └── lib.js / publish.js         ← ❌ 已废弃（旧 xb 路线，行不通，已删除）
+│   └── jianshu_publish_pw.js       ← ✅ 主发布脚本（含插图，实战验证）
+├── templates/
+│   ├── example_article.txt         ← 示例正文格式
+│   └── 婚车租车_article_2026-09-27.txt ← 实战发布原文（标题+13段）
 ├── references/
-│   └── troubleshooting.md          ← 问题排查（独立实例路线）
-└── templates/
-    └── example_article.txt         ← 示例正文
+│   ├── troubleshooting.md          ← 问题排查（playwright 路线 + 历史有效坑位）
+│   └── history/                    ← 历史事件记录（只读存档）
 ```
+
+> 旧 agent-browser 路线的 `publish_cdp.js`、`launch_isolated_chrome.js` 已删除
+> （本机无 agent-browser CLI，启动统一走 isolated-browser skill 的 launch.js）。
