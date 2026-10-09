@@ -29,7 +29,7 @@ description: 简书（jianshu.com）文章自动发布流程。通过 isolated-b
 | 项目 | 要求 |
 |------|------|
 | 浏览器 | 正式版 Chrome（isolated-browser 自动定位） |
-| 驱动 | playwright-core，装在 `~/.workbuddy/binaries/node/workspace/node_modules` |
+| 驱动 | playwright-core，由 `isolated-browser/scripts/pathkit.js` 运行时自动探测（无需手工设 `OPENCLAW_NODE_MODULES`） |
 | 运行时 | managed Node 22（`~/.workbuddy/binaries/node/versions/.../node.exe`，或 bash 里直接 `node`） |
 | 依赖 skill | `isolated-browser`（拉起隔离实例） |
 
@@ -40,11 +40,11 @@ description: 简书（jianshu.com）文章自动发布流程。通过 isolated-b
 node ~/.workbuddy/skills/isolated-browser/scripts/launch.js "https://www.jianshu.com/writer#/" && sleep 7200
 
 # 2) 发布（正文 UTF-8 txt 按换行分段；配图可选）
-export OPENCLAW_NODE_MODULES="$HOME/.workbuddy/binaries/node/workspace/node_modules"
+#    playwright-core 路径由脚本自动探测，无需设 OPENCLAW_NODE_MODULES
 node ~/.workbuddy/skills/jianshu-publisher/scripts/jianshu_publish_pw.js \
-  --title "婚车租车全攻略：如何选到心仪的婚庆婚车车队？" \
+  --title "文章标题" \
   --body-file ./article.txt \
-  --image "D:/skills/car/11.jpg"
+  --image "<配图路径>"
 
 # 只填不发布（存草稿）：加 --no-publish
 # 指定端口：--cdp-port 9222

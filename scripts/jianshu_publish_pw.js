@@ -6,25 +6,38 @@
  *   node ~/.workbuddy/skills/isolated-browser/scripts/launch.js "https://www.jianshu.com/writer#/" && sleep 7200
  *
  * 用法：
- *   export OPENCLAW_NODE_MODULES="$HOME/.workbuddy/binaries/node/workspace/node_modules"
  *   node scripts/jianshu_publish_pw.js \
  *     --title "文章标题" \
  *     --body-file article.txt \
- *     --image "D:/skills/car/11.jpg"        # 可选，文末插图
+ *     --image "<配图路径>"        # 可选，文末插图
  *   node scripts/jianshu_publish_pw.js --title "..." --body-file a.txt --no-publish   # 只存草稿
  *
  * 退出码：0=发布成功 | 2=每日上限拦截(草稿留存) | 3=编辑器非空白且无法新建 | 1=其他错误
  *
  * 环境：Windows + 正式版 Chrome + isolated-browser 隔离实例（CDP 默认 9222）
- * 依赖：playwright-core（OPENCLAW_NODE_MODULES 下）
+ * 依赖：playwright-core —— 路径由 ../../isolated-browser/scripts/pathkit.js 运行时探测，
+ *       也可设 OPENCLAW_NODE_MODULES 覆盖
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const NODE_MODULES = process.env.OPENCLAW_NODE_MODULES
-  || path.join(process.env.USERPROFILE, '.workbuddy/binaries/node/workspace/node_modules');
-const { chromium } = require(path.join(NODE_MODULES, 'playwright-core'));
+const NODE_MODULES = process.env.OPENCLAW_NODE_MODULES || null;
+
+function loadPlaywright() {
+  // 首选：公共解析器（不写死用户名 / 盘符 / 版本号）
+  try {
+    return require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'pathkit.js')).resolvePlaywright();
+  } catch (e) { /* 回退本地探测 */ }
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const cands = [NODE_MODULES, home && path.join(home, '.workbuddy/binaries/node/workspace/node_modules')].filter(Boolean);
+  for (const c of cands) {
+    try { return require(path.join(c, 'playwright-core')); } catch (e) { /* next */ }
+  }
+  throw new Error('未找到 playwright-core，请设置 OPENCLAW_NODE_MODULES');
+}
+
+const { chromium } = loadPlaywright();
 
 const CDP_PORT = process.env.ISOB_CDP_PORT || '9222';
 const sleep = ms => new Promise(r => setTimeout(r, ms));

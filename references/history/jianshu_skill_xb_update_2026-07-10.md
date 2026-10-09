@@ -6,7 +6,7 @@
 正文/标题填写用的是 nativeSetter/innerHTML 老机制。本次统一改为 xb 托管 + 键盘逐字输入。
 
 ## 关键事实（本次实测确认）
-- **xb 路径**：`F:\qclaw\v0.2.32.610\resources\openclaw\config\skills\xbrowser\scripts\xb.cjs`
+- **xb 路径**：`<qclaw安装目录>/resources/openclaw\config\skills\xbrowser\scripts\xb.cjs`
 - **Node 二进制**：`F:\qclaw\v0.2.32.610\resources\node\node.exe`（qclaw 自带，系统 PATH 的 node 是 .cmd 包装会报「内置 node 未启用」）
 - **启动流程**：`xb init` → 若已有 Chrome 未开 CDP → `xb guide close-browser`（决策点，需用户确认）→ `xb stop chrome --force` → `xb run --browser chrome open <url>`
 - **填写机制（用户要求 + 实测通过）**：`xb type <sel> <text>` 发送真实键盘事件，React 受控组件正确同步。
