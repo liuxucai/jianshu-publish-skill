@@ -1,1 +1,8 @@
-2.0.0
+2.1.0
+2026-10-12 全平台配图统一 3 张：
+- `jianshu_publish_pw.js`：`--image` 支持重复传参；弹窗 `#kalamu-upload-image` 带 multiple，一次 setInputFiles(数组) 传多张；
+  新增 `--keyword/--tags/--image-top/--image-dir/--no-image`，缺省由共享 planImages() 自动挑 3 张。
+- 修正发布判定：点发布后 click 超时 ≠ 失败（按钮随「发布成功」层一起消失），不再重试、不再误报失败。
+- `references/history/` 4 篇历史文档合并归档为 1 篇 README.md（xb 时代内容删除，仅保留仍有效结论）。
+- 新增 troubleshooting Q14/Q15：多图改造与"超时≠失败"的关键坑 + 已证伪做法。
+- 实测：3 张配图发布成功 https://www.jianshu.com/p/85cc3a5bf8ca

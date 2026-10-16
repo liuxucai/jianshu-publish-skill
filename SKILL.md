@@ -44,7 +44,8 @@ node ~/.workbuddy/skills/isolated-browser/scripts/launch.js "https://www.jianshu
 node ~/.workbuddy/skills/jianshu-publisher/scripts/jianshu_publish_pw.js \
   --title "文章标题" \
   --body-file ./article.txt \
-  --image "<配图路径>"
+  --keyword "婚车租车" --tags "婚庆用车,婚庆婚车车队"   # 配图默认 3 张（按标签从素材库自动挑）
+  # 也可手动多张：--image a.jpg --image b.jpg --image c.jpg；--no-image 不配图；--image-top N 改张数
 
 # 只填不发布（存草稿）：加 --no-publish
 # 指定端口：--cdp-port 9222

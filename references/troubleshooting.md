@@ -103,3 +103,36 @@ Agent 环境下脚本 spawn 的隔离 Chrome（detached+unref）会在命令结�
 沙箱会直接杀掉写 `D:\` 的进程（exit 1、日志戛然而止）。
 对 `D:\skills\...` 的批量删除/复制/git 操作需关闭沙箱执行；
 通过 `~/.workbuddy/skills/` 下的符号链接用文件工具读写则不受影响。
+
+---
+
+## Q14.【2026-10-12】多图（3 张）改造：问题与解决
+
+**新增能力**：`--image` 支持**重复传参**（`a.image.push()`）；另新增 `--keyword` / `--tags` /
+`--image-top` / `--image-dir` / `--no-image`。不给 `--image` 时由共享工具
+`../../isolated-browser/scripts/post_images.js` 的 `planImages()` 按标签从素材库自动挑 3 张。
+
+### 多张图片走一次 `setInputFiles(数组)`
+- 简书插图弹窗内自带 `#kalamu-upload-image`，**带 `multiple`**，可直接一次传多张：
+  `await fi.setInputFiles(IMAGES)`（数组）。
+- 上传完成判据同步改为「编辑器内 `div.kalamu-area img` 数 **≥ 配图数** 且稳定」，
+  超时上限从 90s 放宽到 120s。
+
+### Q15.【关键坑】点「发布」后 Playwright 报超时 —— 其实已经发布成功
+- **现象**：点 `a[data-action="publicize"]` 后 `click()` 抛
+  `Timeout ... element is not stable / detached` 之类错误，脚本据此判"失败"。
+- **原因**：简书点发布后**直接弹出「发布成功」层**，`publicize` 按钮随 DOM 一起消失；
+  Playwright 的 click 在点击前后会做 actionability 复检，元素没了就超时报错。
+- **结论**：**超时 ≠ 失败**。修正后：`click({timeout:5000})` 的异常只打日志、**不重试、不退出**，
+  交给下方 Q4 的三级成功判定（`a._2ajaT`「发布成功，点击查看文章」/ `li._2po2r.cRfUr` 变「已发布」/ URL 含 `/p/`）。
+- 同时把"直接发布"菜单项 `li._2po2r.cRfUr` 改为**存在才点**（不存在说明已经直接发布成功）。
+
+### 实测结果（2026-10-12）
+3 张配图 + 发布成功：`https://www.jianshu.com/p/85cc3a5bf8ca`。
+
+### 已证伪（勿再试）
+| 做法 | 为什么不行 |
+|---|---|
+| 把「点发布后 click 超时」当失败并重试 | 首次点击其实已成功，重试会重复触发；应以成功标志判定 |
+| 逐张 `setInputFiles` 多次调用 | 弹窗 input 支持 `multiple`，一次传数组更稳、更省时间 |
+| 用 `cnt > 0` 判上传完成 | 多图时必须 `cnt >= 配图数`，否则会提前放行 |

@@ -9,7 +9,9 @@
  *   node scripts/jianshu_publish_pw.js \
  *     --title "文章标题" \
  *     --body-file article.txt \
- *     --image "<配图路径>"        # 可选，文末插图
+ *     --keyword "婚车租车" --tags "婚庆用车,婚庆婚车车队"   # 配图默认 3 张（按标签从素材库自动挑）
+ *   # 也可手动指定多张：--image a.jpg --image b.jpg --image c.jpg
+ *   # 不想要配图：--no-image；改张数：--image-top N
  *   node scripts/jianshu_publish_pw.js --title "..." --body-file a.txt --no-publish   # 只存草稿
  *
  * 退出码：0=发布成功 | 2=每日上限拦截(草稿留存) | 3=编辑器非空白且无法新建 | 1=其他错误
@@ -43,12 +45,17 @@ const CDP_PORT = process.env.ISOB_CDP_PORT || '9222';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const a = { title: '', bodyFile: '', image: '', cdpPort: CDP_PORT, noPublish: false };
+  const a = { title: '', bodyFile: '', image: [], cdpPort: CDP_PORT, noPublish: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--title') a.title = argv[++i] || '';
     else if (k === '--body-file') a.bodyFile = argv[++i] || '';
-    else if (k === '--image') a.image = argv[++i] || '';
+    else if (k === '--image') a.image.push(argv[++i] || '');       // 可重复：多张配图
+    else if (k === '--keyword') a.keyword = argv[++i] || '';
+    else if (k === '--tags') a.tags = argv[++i] || '';
+    else if (k === '--image-top') a.imageTop = argv[++i] || '';
+    else if (k === '--image-dir') a.imageDir = argv[++i] || '';
+    else if (k === '--no-image') a.noImage = true;
     else if (k === '--cdp-port') a.cdpPort = argv[++i] || CDP_PORT;
     else if (k === '--no-publish') a.noPublish = true;
   }
@@ -71,7 +78,16 @@ async function main() {
   if (!args.title || !args.bodyFile) { console.error('缺少 --title 或 --body-file'); process.exit(1); }
   const body = fs.readFileSync(args.bodyFile, 'utf8');
   const paragraphs = body.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  if (args.image && !fs.existsSync(args.image)) { console.error('配图不存在:', args.image); process.exit(1); }
+
+  // 配图：显式 --image（可重复）优先；否则按「标签 → 素材库」自动挑 Top-N（默认 3 张）
+  const { planImages } = require(path.resolve(__dirname, '..', '..', 'isolated-browser', 'scripts', 'post_images.js'));
+  const plan = planImages({
+    explicit: args.image, noImage: args.noImage, keyword: args.keyword || args.title, tags: args.tags,
+    top: args.imageTop, layout: args.imageLayout, at: args.imageAt, dir: args.imageDir, paraCount: paragraphs.length,
+  });
+  const IMAGES = plan.images;
+  console.log(`[配图] ${IMAGES.length} 张（来源 ${plan.source} | 布局 ${plan.layout}）`);
+  if (plan.detail) plan.detail.chosen.forEach((c, i) => console.log(`  ${i + 1}) 图${c.number} ${c.name || ''} → ${c.image}`));
 
   console.log('连接 CDP:', args.cdpPort);
   const browser = await chromium.connectOverCDP('http://127.0.0.1:' + args.cdpPort);
@@ -142,9 +158,9 @@ async function main() {
   console.log('正文确认字数:', len);
   if (len <= 0) { console.error('BODY_EMPTY'); process.exit(1); }
 
-  // ---- 插入配图（文末）----
-  if (args.image) {
-    console.log('插入配图:', args.image);
+  // ---- 插入配图（文末，支持多张：弹窗 file input 带 multiple，可一次传数组）----
+  if (IMAGES.length) {
+    console.log(`插入配图（${IMAGES.length} 张）:`, IMAGES.join(' , '));
     await page.focus('div.kalamu-area');
     await page.keyboard.press('End');
     await page.keyboard.press('Enter');
@@ -155,7 +171,7 @@ async function main() {
     const fis = await page.$$('input[type=file]');
     for (const fi of fis) {
       const acc = (await fi.getAttribute('accept')) || '';
-      if (/image/i.test(acc)) { await fi.setInputFiles(args.image); uploaded = true; break; }
+      if (/image/i.test(acc)) { await fi.setInputFiles(IMAGES); uploaded = true; break; }
     }
     // 方案B（简书实际路径）：点工具栏图片按钮 a.fa.fa-picture-o → 网页弹窗内 #kalamu-upload-image
     if (!uploaded) {
@@ -166,19 +182,19 @@ async function main() {
       await sleep(1500);
       const fi = await page.$('#kalamu-upload-image');
       if (!fi) { console.error('NO_UPLOAD_INPUT: 插图弹窗未出现'); process.exit(1); }
-      await fi.setInputFiles(args.image);
+      await fi.setInputFiles(IMAGES);
     }
-    // 等待上传完成：编辑器内 img 出现且数量稳定
-    const deadline = Date.now() + 90000;
+    // 等待上传完成：编辑器内 img 数达到期望且稳定
+    const deadline = Date.now() + 120000;
     let cnt0 = 0, stable = 0, ok = false;
     while (Date.now() < deadline) {
       await sleep(2000);
       const cnt = await page.$$eval('div.kalamu-area img', els => els.length).catch(() => 0);
-      if (cnt > 0 && cnt === cnt0) { stable++; if (stable >= 1) { ok = true; break; } }
+      if (cnt >= IMAGES.length && cnt === cnt0) { stable++; if (stable >= 1) { ok = true; break; } }
       else stable = 0;
       cnt0 = cnt;
     }
-    console.log(ok ? '配图上传完成, img数:' + cnt0 : 'IMAGE_UPLOAD_TIMEOUT');
+    console.log(ok ? `配图上传完成, img数:${cnt0}/${IMAGES.length}` : `IMAGE_UPLOAD_TIMEOUT (img数 ${cnt0}/${IMAGES.length})`);
     // ⚠️ 必须关掉插图弹窗，否则挡住发布按钮（intercepts pointer events）
     await closeImageDialog(page);
     if (!ok) process.exit(1);
@@ -190,23 +206,23 @@ async function main() {
   console.log('点击发布...');
   const pub = await page.$('a[data-action="publicize"]');
   if (!pub) { console.error('NO_PUBLISH_BTN'); process.exit(1); }
+  // 实测（2026-10-12）：点击生效后简书直接弹「发布成功」层，publicize 随 DOM 消失，
+  // click 的 actionability 复检会超时报错——超时≠失败，不重试、不退出，交给下方成功判定
   try {
-    await pub.click({ timeout: 8000 });
+    await pub.click({ timeout: 5000 });
   } catch (e) {
-    // 弹窗遮挡兜底：关弹窗重试
-    console.log('  发布按钮被遮挡, 尝试关闭弹窗后重试...');
-    await closeImageDialog(page);
-    await page.click('a[data-action="publicize"]');
+    console.log('  发布按钮点击超时（按钮已随发布弹层消失，视为已触发）');
   }
-  await sleep(1200);
-  const direct = await page.$('li._2po2r.cRfUr');
-  if (!direct) { console.error('NO_DIRECT_PUBLISH_ITEM'); process.exit(1); }
-  await direct.click();
   await sleep(1500);
-  const btns = await page.$$('button');
-  for (const b of btns) {
-    const t = (await b.innerText().catch(() => '')).trim();
-    if (t === '确 认' || t === '确认') { await b.click().catch(() => {}); console.log('文集确认: CONFIRMED'); break; }
+  const direct = await page.$('li._2po2r.cRfUr');
+  if (direct) {
+    await direct.click().catch(() => {});
+    await sleep(1500);
+    const btns = await page.$$('button');
+    for (const b of btns) {
+      const t = (await b.innerText().catch(() => '')).trim();
+      if (t === '确 认' || t === '确认') { await b.click().catch(() => {}); console.log('文集确认: CONFIRMED'); break; }
+    }
   }
   await sleep(3000);
 
